@@ -32,56 +32,72 @@ LockManagerA::LockManagerA(deque<Txn*>* ready_txns) {
 
 bool LockManagerA::WriteLock(Txn* txn, const Key& key) {
   bool empty = true;
-  LockRequest rq(EXCLUSIVE, txn);
+  LockRequest lr(EXCLUSIVE, txn);
   deque<LockRequest> *dq = _getLockQueue(key);
 
   empty = dq->empty();
-  dq->push_back(rq);
+  dq->push_back(lr);
 
-  if (!empty) { // Add to wait list, doesn't own lock.
-    txn_waits_[txn]++;
+  if (!empty) { // Add to waiting list
+    // Apabila key txn pada map kosong, tambahkan
+    // Else, tambah counter
+    if (txn_waits_.find(txn) == txn_waits_.end()) {
+      txn_waits_[txn] = 1;
+    } else {
+      txn_waits_[txn]++;
+    }
   }
+
   return empty;
 }
 
 bool LockManagerA::ReadLock(Txn* txn, const Key& key) {
-  // Since Part 1A implements ONLY exclusive locks, calls to ReadLock can
-  // simply use the same logic as 'WriteLock'.
+  // Karena hanya memakai exclusive lock,
+  // read lock sama seperti write lock
   return WriteLock(txn, key);
 }
 
 void LockManagerA::Release(Txn* txn, const Key& key) {
   deque<LockRequest> *queue = _getLockQueue(key);
-  bool removedOwner = true; // Is the lock removed the lock owner?
+  
+  // Cek apakah elemen pertama merupakan lock owner dari key
+  // Apabila tidak, traversal queue dan hapus elemen txn
+  // Apabila iya, pop elemen pertama dan push front dari queue
+  // ke queue ready_txns_ dan hapus dari waiting map
+  if (queue->front().txn_ == txn) {
+    queue->pop_front();
 
-  // Delete the txn's exclusive lock.
-  for (auto it = queue->begin(); it < queue->end(); it++) {
-    if (it->txn_ == txn) { // TODO is it ok to just compare by address?
-        queue->erase(it);
-        break;
-    }
-    removedOwner = false;
-  }
-
-  if (!queue->empty() && removedOwner) {
-    // Give the next transaction the lock
-    LockRequest next = queue->front();
-
-    if (--txn_waits_[next.txn_] == 0) {
+    if (queue->size() > 0) {
+      LockRequest next = queue->front();
+      if (--txn_waits_[next.txn_] == 0) {
         ready_txns_->push_back(next.txn_);
         txn_waits_.erase(next.txn_);
+      } 
+    }
+  } else {
+    for (auto it = queue->begin(); it < queue->end(); it++) {
+      if (it->txn_ == txn) {
+        queue->erase(it);
+        break;
+      }
     }
   }
+
 }
 
 LockMode LockManagerA::Status(const Key& key, vector<Txn*>* owners) {
   deque<LockRequest> *dq = _getLockQueue(key);
+
+  // Hapus semua elemen vector owners
+  owners->clear();
+
+  if (dq->size() > 0) {
+    owners->push_back(dq->front().txn_);
+  }
+  
   if (dq->empty()) {
     return UNLOCKED;
   } else {
-    vector<Txn*> _owners;
-    _owners.push_back(dq->front().txn_);
-    *owners = _owners;
     return EXCLUSIVE;
   }
 }

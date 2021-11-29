@@ -279,45 +279,49 @@ bool TxnProcessor::OCCValidateTransaction(const Txn &txn) const {
 }
 
 void TxnProcessor::RunOCCScheduler() {
-  // Fetch transaction requests, and immediately begin executing them.
-  while (tp_.Active()) {
-    Txn *txn;
-    if (txn_requests_.Pop(&txn)) {
+  while(this->tp_.Active()) {
+    Txn *tx, *tx2;
+    if(this->txn_requests_.Pop(&tx)) {
 
-      // Start txn running in its own thread.
-      tp_.RunTask(new Method<TxnProcessor, void, Txn*>(
-                  this,
-                  &TxnProcessor::ExecuteTxn,
-                  txn));
+      this->tp_.RunTask(new Method<TxnProcessor, void, Txn*>(this, &TxnProcessor::ExecuteTxn, tx));
     }
 
-    // Validate completed transactions, serially
-    Txn *finished;
-    while (completed_txns_.Pop(&finished)) {
-      if (finished->Status() == COMPLETED_A) {
-        finished->status_ = ABORTED;
+    // saat sudah complete
+    while(this->completed_txns_.Pop(&tx2)) {
+      if(tx2->Status() == COMPLETED_A) {
+        tx2->status_ = ABORTED;
       } else {
-        bool valid = OCCValidateTransaction(*finished);
-        if (!valid) {
-          // Cleanup and restart
-          finished->reads_.empty();
-          finished->writes_.empty();
-          finished->status_ = INCOMPLETE;
+        bool check = true;
 
-          mutex_.Lock();
-          txn->unique_id_ = next_unique_id_;
-          next_unique_id_++;
-          txn_requests_.Push(finished);
-          mutex_.Unlock();
+        for(auto&& a : tx2->readset_) {
+          if(tx2->occ_start_time_ < this->storage_->Timestamp(a)) check = false;
+        }
+
+        for(auto && a : tx2->writeset_) {
+          if(tx2->occ_start_time_ < this->storage_->Timestamp(a)) check = false;
+        }
+
+        if(check) {
+          // lakukan commit
+          ApplyWrites(tx2);
+          tx->status_ = COMMITTED;
         } else {
-          // Commit the transaction
-          ApplyWrites(finished);
-          txn->status_ = COMMITTED;
+          tx2->reads_.empty();
+          tx2->writes_.empty();
+          tx2->status_ = INCOMPLETE;
+
+          this->mutex_.Lock();
+          tx->unique_id_ = next_unique_id_++;
+
+          this->txn_requests_.Push(tx2);
+          this->mutex_.Unlock();
         }
       }
 
-      txn_results_.Push(finished);
+      this->txn_results_.Push(tx2);
     }
+
+
   }
 }
 
